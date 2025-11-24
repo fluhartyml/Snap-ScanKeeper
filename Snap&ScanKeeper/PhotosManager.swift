@@ -17,20 +17,63 @@ class PhotosManager {
     private init() {}
 
     // Save scanned document to Photos and return PDF URL
-    func saveScan(_ scan: VNDocumentCameraScan) async throws -> URL {
+    func saveScan(_ scan: VNDocumentCameraScan, format: SaveFormat) async throws -> URL {
         // Request Photos permission
         let status = await requestPhotoLibraryPermission()
         guard status == .authorized || status == .limited else {
             throw PhotosError.permissionDenied
         }
 
-        // Create PDF from scanned images
-        let pdfURL = try createPDF(from: scan)
+        var pdfURL: URL?
 
-        // Save to custom album
-        try await saveToCustomAlbum(pdfURL: pdfURL)
+        // Handle save format
+        switch format {
+        case .shareOnly:
+            // Create PDF for share sheet only (don't save to Photos)
+            pdfURL = try createPDF(from: scan)
 
-        return pdfURL
+        case .pdfOnly:
+            // Create and save PDF only
+            pdfURL = try createPDF(from: scan)
+            try await saveToCustomAlbum(pdfURL: pdfURL!)
+
+        case .both:
+            // Save individual pages
+            try await saveIndividualPages(from: scan)
+            // Create and save PDF
+            pdfURL = try createPDF(from: scan)
+            try await saveToCustomAlbum(pdfURL: pdfURL!)
+
+        case .pagesOnly:
+            // Save individual pages only
+            try await saveIndividualPages(from: scan)
+            // Create temporary PDF for share sheet (not saved to Photos)
+            pdfURL = try createPDF(from: scan)
+        }
+
+        return pdfURL ?? FileManager.default.temporaryDirectory.appendingPathComponent("temp.pdf")
+    }
+
+    private func saveIndividualPages(from scan: VNDocumentCameraScan) async throws {
+        let albumName = "Snap&ScanKeeper Images"
+
+        // Find or create custom album
+        let album = try await findOrCreateAlbum(named: albumName)
+
+        // Save each page as individual image
+        for pageIndex in 0..<scan.pageCount {
+            let image = scan.imageOfPage(at: pageIndex)
+
+            try await PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetChangeRequest.creationRequestForAsset(from: image)
+                let placeholder = request.placeholderForCreatedAsset
+
+                if let placeholder = placeholder,
+                   let albumChangeRequest = PHAssetCollectionChangeRequest(for: album) {
+                    albumChangeRequest.addAssets([placeholder] as NSArray)
+                }
+            }
+        }
     }
 
     private func requestPhotoLibraryPermission() async -> PHAuthorizationStatus {
@@ -64,30 +107,10 @@ class PhotosManager {
     }
 
     private func saveToCustomAlbum(pdfURL: URL) async throws {
-        let albumName = "Snap&ScanKeeper"
+        let albumName = "Snap&ScanKeeper PDFs"
 
         // Find or create custom album
-        var album: PHAssetCollection?
-        let fetchOptions = PHFetchOptions()
-        fetchOptions.predicate = NSPredicate(format: "title = %@", albumName)
-        let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: fetchOptions)
-
-        if let existingAlbum = collections.firstObject {
-            album = existingAlbum
-        } else {
-            // Create new album
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumName)
-            }
-
-            // Fetch the newly created album
-            let newCollections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: fetchOptions)
-            album = newCollections.firstObject
-        }
-
-        guard let targetAlbum = album else {
-            throw PhotosError.albumCreationFailed
-        }
+        let album = try await findOrCreateAlbum(named: albumName)
 
         // Save PDF to Photos
         var assetPlaceholder: PHObjectPlaceholder?
@@ -97,10 +120,35 @@ class PhotosManager {
             assetPlaceholder = request?.placeholderForCreatedAsset
 
             if let placeholder = assetPlaceholder,
-               let albumChangeRequest = PHAssetCollectionChangeRequest(for: targetAlbum) {
+               let albumChangeRequest = PHAssetCollectionChangeRequest(for: album) {
                 albumChangeRequest.addAssets([placeholder] as NSArray)
             }
         }
+    }
+
+    // Helper to find or create album
+    private func findOrCreateAlbum(named albumName: String) async throws -> PHAssetCollection {
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.predicate = NSPredicate(format: "title = %@", albumName)
+        let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: fetchOptions)
+
+        if let existingAlbum = collections.firstObject {
+            return existingAlbum
+        }
+
+        // Create new album
+        try await PHPhotoLibrary.shared().performChanges {
+            PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumName)
+        }
+
+        // Fetch the newly created album
+        let newCollections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: fetchOptions)
+
+        guard let newAlbum = newCollections.firstObject else {
+            throw PhotosError.albumCreationFailed
+        }
+
+        return newAlbum
     }
 }
 
