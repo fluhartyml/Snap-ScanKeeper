@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import MessageUI
 
 enum SaveFormat: String, CaseIterable, Identifiable {
     case shareOnly = "Share Only (Don't Save)"
@@ -46,6 +47,7 @@ class SettingsManager: ObservableObject {
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var settings = SettingsManager()
+    @State private var showingFeedback = false
 
     var body: some View {
         NavigationView {
@@ -90,6 +92,35 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+
+                Section(header: Text("About")) {
+                    HStack {
+                        Text("Snap&ScanKeeper")
+                            .font(.system(size: 18, weight: .semibold))
+                        Spacer()
+                        Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Michael Lee Fluharty")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                    Text("Engineered with Claude by Anthropic")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Button {
+                        showingFeedback = true
+                    } label: {
+                        Label("Send Feedback", systemImage: "envelope.fill")
+                            .font(.system(size: 18))
+                    }
+                }
+            }
+            .sheet(isPresented: $showingFeedback) {
+                FeedbackView(appName: "Snap&ScanKeeper")
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
